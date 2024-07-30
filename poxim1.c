@@ -9,6 +9,21 @@
 // Entrada/saida padrao
 #include <stdio.h>
 
+// create a potencial function that recieves the number and expoenent
+uint32_t pot(uint32_t number, uint32_t exp)
+{
+    // create a variable to store the result
+    uint32_t result = 1;
+    // iterate over the exponent
+    for (uint32_t i = 0; i < exp; i++)
+    {
+        // multiply the result by the number
+        result *= number;
+    }
+    // return the result
+    return result;
+}
+
 // Funcao principal
 int main(int argc, char *argv[])
 {
@@ -534,7 +549,10 @@ int main(int argc, char *argv[])
 
                 // Atualização do registrador de status (SR)
                 SR = (ZN << 6) | (OV << 3);
-
+                // concat R[z] and R[y] and multiplicate by 2^i+1 using pot function
+                uint64_t result = ((uint64_t)R[z] << 32) | R[y];
+                result *= (1 << (i + 1));
+                R[z] = result >> 32;
                 // Formatação da instrução
                 // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
                 sprintf(instrucao, "sla r%u,r%u,r%u,%u", z, x, y, i);
