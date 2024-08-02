@@ -565,9 +565,15 @@ int main(int argc, char *argv[])
             // OPERAÇÃO MUL
             else if (((R[28] >> 8) & 0b111) == 0b000)
             {
-                uint32_t z = (R[28] >> 21) & 0b11111;
-                uint32_t x = (R[28] >> 16) & 0b11111;
-                uint32_t y = (R[28] >> 11) & 0b11111;
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
+
+                R[z] = R[x] * R[y];
+                // xyl = R[28] & (0x1F | 0x3E00000);
+                R[i] = R[z];
+                // with the mask 0x1F we get the last 5 bits of the instruction
 
                 // Multiplicação sem sinal
                 uint64_t result_mul = (uint64_t)R[x] * (uint64_t)R[y];
@@ -776,7 +782,6 @@ int main(int argc, char *argv[])
                 // Estender o sinal para os bits superiores
                 xyl |= 0xFFF00000; // Definindo os bits superiores para representar um valor negativo
             }
-
             // Execucao do comportamento
             R[z] = xyl;
             // Formatacao da instrucao
