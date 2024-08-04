@@ -619,18 +619,15 @@ int main(int argc, char *argv[])
                 // R[z] recebe os 32 bits mais significativos de result e R[x] recebe os 32 bits menos significativos de result
                 R[z] = result >> 32;
                 R[y] = result & 0xFFFFFFFF;
-                ZN = (R[z] == 0);
-                OV = (R[z] != 0);
+                ZN = (result == 0);
+                OV = (R[i] != 0);
 
                 // Atualização do registrador de status (SR)
-                SR = (ZN << 6) | (OV << 3);
+                SR = (ZN << 6) | (CY << 0);
                 // Formatação da instrução
                 // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
                 sprintf(instrucao, "sll r%u,r%u,r%u,%u", z, x, y, i);
-
-                // Formatação de saída
-                // 0x0000002C:	sla r0,r2,r2,10          	R0:R2=R0:R2<<11=0x0000000080000000,SR=0x00000001
-                // printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, 0, z, 0, z, i, result, SR);
+                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, z, y, i + 1, result, SR);
             }
 
             // OPERAÇÃO MULS
@@ -641,19 +638,24 @@ int main(int argc, char *argv[])
                 y = (R[28] & (0b11111 << 11)) >> 11;
                 i = (R[28] & (0b11111 << 0)) >> 0;
 
-                // Multiplicação com tratamento de sinal
-                int64_t result_mul = (int64_t)((int32_t)R[x]) * (int64_t)((int32_t)R[y]);
-                R[z] = result_mul >> 32;
+                int32_t operand_x = (int32_t)R[x];
+                int32_t operand_y = (int32_t)R[y];
+                int64_t result = operand_x * operand_y;
+
+                // Armazena os 32 bits mais significativos em R[i] e os 32 bits menos significativos em R[z]
+                // faça a condição abaixo apenas de i for diferente de 0 , caso contrário R[i] vai receber o valor 0
+                R[i] = (uint32_t)(result >> 32);        // Extrai os 32 bits mais significativos
+                R[z] = (uint32_t)(result & 0xFFFFFFFF); // Extrai os 32 bits menos significativos
 
                 // Definindo os campos afetados
-                ZN = (R[z] == 0);
-                OV = (result_mul >> 32) != 0;
+                // ZN = (R[z] == 0);
+                // OV = (result_mul >> 32) != 0;
 
                 // Formatação da instrução
-                sprintf(instrucao, "muls r%u,r%u,r%u,r%u", 0, z, x, y);
+                sprintf(instrucao, "muls r%u,r%u,r%u,r%u", i, z, x, y);
 
                 // Formatação de saída
-                printf("0x%08X:\t%-25s\tR0:R%u=R%u*R%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, y, (unsigned long long)result_mul, (ZN << 1) | (OV ? 0x40 : 0x00));
+                printf("0x%08X:\t%-25s\tR%u:R%u=R%u*R%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, i, z, x, y, result, SR);
                 break;
             }
 
