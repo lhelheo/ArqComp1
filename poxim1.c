@@ -584,20 +584,24 @@ int main(int argc, char *argv[])
                 x = (R[28] & (0b11111 << 16)) >> 16;
                 y = (R[28] & (0b11111 << 11)) >> 11;
                 i = (R[28] & (0b11111 << 0)) >> 0;
-                uint64_t result = (uint64_t)R[x] * (uint64_t)R[y];
 
-                // R[i] recebe os 32 bits mais significativos de result e R[z] recebe os 32 bits menos significativos de result
-                R[z] = result >> 32;
-                R[i] = result & 0xFFFFFFFF;
+                uint32_t operand_x = (uint32_t)R[x];
+                uint32_t operand_y = (uint32_t)R[y];
+                uint64_t result = operand_x * operand_y;
+
+                // Armazena os 32 bits mais significativos em R[i] e os 32 bits menos significativos em R[z]
+                // faça a condição abaixo apenas de i for diferente de 0 , caso contrário R[i] vai receber o valor 0
+                R[i] = (uint32_t)(result >> 32);        // Extrai os 32 bits mais significativos
+                R[z] = (uint32_t)(result & 0xFFFFFFFF); // Extrai os 32 bits menos significativos
+                SR = (ZN << 6) | (OV << 3);
 
                 ZN = (result == 0);
                 CY = (result != 0);
 
                 // Formatação da instrução
-                sprintf(instrucao, "mul r%u,r%u,r%u,r%u", 0, z, x, y);
-
-                // Formatação de saída em tela
-                // TODO: completar depois
+                sprintf(instrucao, "mul r%u,r%u,r%u,r%u", i, z, x, y);
+                // 0x00000034:	mul r0,r5,r4,r3          	R0:R5=R4*R3=0x0000000023F4F31C,SR=0x00000008
+                printf("0x%08X:\t%-25s\tR%u:R%u=R%u*R%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, i, z, x, y, result, SR);
                 break;
             }
 
