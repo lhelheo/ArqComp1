@@ -398,6 +398,9 @@ int main(int argc, char *argv[])
         uint8_t z = 0, x = 0, i = 0, y = 0;
         uint32_t pc = 0, xyl = 0;
         uint32_t SR = R[31];
+        uint32_t IR = R[28];
+        uint32_t PC = R[29];
+        uint32_t SP = R[30];
         uint8_t ZN = 0;
         uint8_t SN = 0;
         uint8_t OV = 0;
@@ -446,22 +449,28 @@ int main(int argc, char *argv[])
             printf("0x%08X:\t%-25s\tR%u=MEM[0x%08X]=0x%02X\n", R[29], instrucao, z,
                    R[x] + i, R[z]);
             break;
+
         // add
         case 0b000010:
             z = (R[28] & (0b11111 << 21)) >> 21;
             x = (R[28] & (0b11111 << 16)) >> 16;
             y = (R[28] & (0b11111 << 11)) >> 11;
 
-            // Adição com tratamento adequado de complemento de dois
-            R[z] = R[x] + R[y];
+            // Converta R[x] e R[y] para 64 bits, depois adicione os valores e armazene em result
+            uint64_t temp_x = (uint64_t)R[x];
+            uint64_t temp_y = (uint64_t)R[y];
+            uint64_t temp_sum = temp_x + temp_y;
+
+            // Armazena o resultado em R[z]
+            R[z] = (int)temp_sum;
 
             // Definindo os campos afetados
-            ZN = (R[z] == 0);
-            SN = (R[z] < 0);
-            OV = ((R[x] >= 0 && R[y] >= 0 && R[z] < 0) || (R[x] < 0 && R[y] < 0 && R[z] >= 0));
-            CY = ((uint32_t)R[z] < (uint32_t)R[x]);
+            ZN = (temp_sum == 0);
+            SN = (temp_sum >> 31) & 1;
+            OV = (temp_x >> 31) & (temp_y >> 31) & !((temp_sum >> 31) & (temp_x >> 31));
+            CY = (temp_sum >> 32) & 1;
 
-            SR = (ZN << 6) | (ZD << 5) | (SN << 4) | (OV << 3) | (IV << 2) | CY;
+            SR = (ZN << 6) | (ZD << 5) | (SN << 4) | (OV << 3) | (IV << 2) | (CY << 0);
 
             // Formatação da instrução
             sprintf(instrucao, "add r%u,r%u,r%u", z, x, y);
@@ -521,16 +530,16 @@ int main(int argc, char *argv[])
             R[z] = R[x] - R[y];
 
             // Definindo os campos afetados
-            // ZN = (R[z] == 0);
-            // SN = (R[z] == 1);
-            // OV = (R[x] != 0 && R[y] >= 0 && R[z] != R[x]);
-            // CY = ((uint32_t)R[z] == 1);
+            ZN = (R[z] == 0);
+            SN = (R[z] >> 31) & 1;
+            OV = ((R[x] >> 31) != (R[y] >> 31)) && ((R[x] >> 31) != (R[z] >> 31));
+            CY = (R[z] >> 31) & 1;
 
-            // SR = (ZN << 6) | (ZD << 5) | (SN << 4) | (OV << 3) | (IV << 2) | CY;
+            SR = (ZN << 6) | (ZD << 5) | (SN << 4) | (OV << 3) | (CY << 0);
 
             // Formatação da instrução
             sprintf(instrucao, "sub r%u,r%u,r%u", z, x, y);
-            printf("0x%08X:\t%-25s\tR%u=R%u-R%u=0x%08X\n", R[29], instrucao, z, x, y, R[z]);
+            printf("0x%08X:\t%-25s\tR%u=R%u-R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, z, x, y, R[z], SR);
             break;
 
         // sla
@@ -543,23 +552,29 @@ int main(int argc, char *argv[])
                 y = (R[28] & (0b11111 << 11)) >> 11;
                 i = (R[28] & (0b11111 << 0)) >> 0;
 
-                // Definindo os campos afetados
-                ZN = (R[z] == 0);
-                OV = (R[z] != 0);
+                // Converta os valores para int64_t
+                uint32_t temp_z = (uint32_t)R[z];
+                uint32_t temp_y = (uint32_t)R[y];
+
+                // Combina os bits em result
+                int64_t result = ((temp_z << 32) | temp_y) << (i + 1);
+
+                // Isola os 32 bits mais significativos e os 32 bits menos significativos
+                uint32_t high_bits = result >> 32;
+                uint32_t low_bits = result & 0xFFFFFFFF;
+
+                R[z] = high_bits;
+                R[x] = low_bits;
 
                 // Atualização do registrador de status (SR)
+                ZN = (result == 0);
+                OV = (high_bits != 0);
+
                 SR = (ZN << 6) | (OV << 3);
-                // concat R[z] and R[y] and multiplicate by 2^i+1 using pot function
-                uint64_t result = ((uint64_t)R[z] << 32) | R[y];
-                result *= (1 << (i + 1));
-                R[z] = result >> 32;
                 // Formatação da instrução
                 // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
                 sprintf(instrucao, "sla r%u,r%u,r%u,%u", z, x, y, i);
-
-                // Formatação de saída
-                // 0x0000002C:	sla r0,r2,r2,10          	R0:R2=R0:R2<<11=0x0000000080000000,SR=0x00000001
-                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, z, y, i + 1, R[z], SR);
+                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, z, y, i + 1, result, SR);
             }
 
             // OPERAÇÃO MUL
@@ -569,19 +584,14 @@ int main(int argc, char *argv[])
                 x = (R[28] & (0b11111 << 16)) >> 16;
                 y = (R[28] & (0b11111 << 11)) >> 11;
                 i = (R[28] & (0b11111 << 0)) >> 0;
+                uint64_t result = (uint64_t)R[x] * (uint64_t)R[y];
 
-                R[z] = R[x] * R[y];
-                // xyl = R[28] & (0x1F | 0x3E00000);
-                R[i] = R[z];
-                // with the mask 0x1F we get the last 5 bits of the instruction
+                // R[i] recebe os 32 bits mais significativos de result e R[z] recebe os 32 bits menos significativos de result
+                R[z] = result >> 32;
+                R[i] = result & 0xFFFFFFFF;
 
-                // Multiplicação sem sinal
-                uint64_t result_mul = (uint64_t)R[x] * (uint64_t)R[y];
-                R[z] = result_mul >> 32; // Armazenando o resultado superior em R[z]
-
-                // Definindo os campos afetados
-                ZN = (R[z] == 0);
-                CY = (result_mul >> 32) != 0;
+                ZN = (result == 0);
+                CY = (result != 0);
 
                 // Formatação da instrução
                 sprintf(instrucao, "mul r%u,r%u,r%u,r%u", 0, z, x, y);
@@ -594,33 +604,38 @@ int main(int argc, char *argv[])
             // OPERAÇÃO SLL
             else if (((R[28] >> 8) & 0b111) == 0b001)
             {
-                z = (R[28] >> 21) & 0x1F;
-                x = (R[28] >> 16) & 0x1F;
-                y = (R[28] >> 11) & 0x1F;
-
-                // Realização do deslocamento para a esquerda
-                uint32_t shift_amount = R[y] + 1;
-                uint64_t result_shift = (uint64_t)R[x] << shift_amount;
-                R[z] = result_shift >> 32;
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
                 // Definindo os campos afetados
+                // converta R[z] e R[y] para 64 bits, depois concatene os R[z] (bits mais significativos) e R[y] (bits menos significativos) em um único valor de 64 bits em result
+                uint64_t result = ((uint64_t)R[z] << 32) | ((uint64_t)R[y]) * (1 << (i + 1));
+                // R[z] recebe os 32 bits mais significativos de result e R[x] recebe os 32 bits menos significativos de result
+                R[z] = result >> 32;
+                R[y] = result & 0xFFFFFFFF;
                 ZN = (R[z] == 0);
-                CY = (R[z] != 0);
+                OV = (R[z] != 0);
 
+                // Atualização do registrador de status (SR)
+                SR = (ZN << 6) | (OV << 3);
                 // Formatação da instrução
-                sprintf(instrucao, "sll r%u,r%u,r%u,%d", z, x, y, 0);
+                // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
+                sprintf(instrucao, "sll r%u,r%u,r%u,%u", z, x, y, i);
 
                 // Formatação de saída
-                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%d=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, z, x, 0, (unsigned long long)R[z], (ZN << 1) | (CY ? 0x08 : 0x00));
-                break;
+                // 0x0000002C:	sla r0,r2,r2,10          	R0:R2=R0:R2<<11=0x0000000080000000,SR=0x00000001
+                // printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u<<%u=0x%016llX,SR=0x%08X\n", R[29], instrucao, 0, z, 0, z, i, result, SR);
             }
 
             // OPERAÇÃO MULS
             else if (((R[28] >> 8) & 0b111) == 0b010)
             {
-                z = (R[28] >> 21) & 0x1F;
-                x = (R[28] >> 16) & 0x1F;
-                y = (R[28] >> 11) & 0x1F;
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
                 // Multiplicação com tratamento de sinal
                 int64_t result_mul = (int64_t)((int32_t)R[x]) * (int64_t)((int32_t)R[y]);
@@ -641,135 +656,88 @@ int main(int argc, char *argv[])
             // OPERAÇÃO SRL
             else if (((R[28] >> 8) & 0b111) == 0b101)
             {
-                uint32_t z = (R[9] >> 21) & 0x1F;
-                uint32_t x = (R[9] >> 16) & 0x1F;
-                uint32_t y = (R[9] >> 11) & 0x1F;
-
-                // Deslocamento para a direita sem sinal
-                R[z] = R[x] >> R[y];
+                // Verifica se os bits 10, 9 e 8 correspondem a 0b111
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
                 // Definindo os campos afetados
+                // converta R[z] e R[y] para 64 bits, depois concatene os R[z] (bits mais significativos) e R[y] (bits menos significativos) em um único valor de 64 bits em result
+                int64_t result = ((int64_t)R[z] << 32) | ((int64_t)R[y]) / (1 << (i + 1));
+                // R[z] recebe os 32 bits mais significativos de result e R[x] recebe os 32 bits menos significativos de result
+                R[z] = result >> 32;
+                R[y] = result & 0xFFFFFFFF;
                 ZN = (R[z] == 0);
-                CY = (R[z] != 0);
+                OV = (R[z] != 0);
 
+                // Atualização do registrador de status (SR)
+                SR = (ZN << 6) | (OV << 3);
                 // Formatação da instrução
-                char instrucao[50];
-                sprintf(instrucao, "srl r%u,r%u,r%u,%u", z, x, x, R[y]);
-
-                // Formatação de saída
-                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u>>%u=0x%016llX,SR=0x%08X\n", R[10], instrucao, z, x, z, x, R[y], (unsigned long long)R[z], (ZN << 1) | (CY ? 0x60 : 0x00));
+                // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
+                sprintf(instrucao, "sra r%u,r%u,r%u,%u", z, x, y, i);
                 break;
             }
 
             // OPERAÇÃO DIV
             else if (((R[28] >> 8) & 0b111) == 0b100)
             {
-                uint32_t z = (R[28] >> 21) & 0x1F;
-                uint32_t x = (R[28] >> 16) & 0x1F;
-                uint32_t y = (R[28] >> 11) & 0x1F;
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
-                // Verificando se o divisor é zero
-                if (R[y] == 0)
-                {
-                    // Divisor é zero, definindo ZD e CY
-                    ZD = 1;
-                    CY = 1;
-
-                    // Definindo os campos afetados
-                    ZN = (R[z] == 0);
-
-                    // Formatação da instrução
-                    sprintf(instrucao, "div r%u,r%u,r%u", z, x, y);
-
-                    // Formatação de saída
-                    printf("0x%08X:\t%-25s\tR%u=R%u%%R%u=0x%08X,R%u=R%u/R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, z, x, y, R[x] % R[y], z, x, y, R[x] / R[y], (ZN << 1) | (ZD << 2) | (CY ? 0x60 : 0x00));
-                    break;
-                }
-                else
-                {
-                    // Divisão sem sinal
-                    R[z] = R[x] % R[y];
-                    R[x] = R[x] / R[y];
-
-                    // Definindo os campos afetados
-                    ZN = (R[z] == 0);
-                    ZD = 0;
-                    CY = (R[z] != 0);
-
-                    // Formatação da instrução
-                    sprintf(instrucao, "div r%u,r%u,r%u", z, x, y);
-
-                    // Formatação de saída
-                    printf("0x%08X:\t%-25s\tR%u=R%u%%R%u=0x%08X,R%u=R%u/R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, z, x, y, R[z], z, x, y, R[x], (ZN << 1) | (ZD << 2) | (CY ? 0x60 : 0x00));
-                    break;
-                }
-            }
-
-            else if (((R[28] >> 8) & 0b111) == 0b111)
-            {                                         // Verifica se os bits 10, 9 e 8 correspondem a 0b111
-                uint32_t z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
-                uint32_t x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
-                uint32_t y = (R[28] >> 11) & 0b11111; // Obtém o registrador y
-                int8_t imed = R[28] & 0xFF;           // Obtém o valor do imediato
-
-                // Execução do deslocamento aritmético para a direita
-                int32_t shift_amount = R[y] + 1;
-                int64_t result_shift = (int64_t)R[x] >> shift_amount;
-                R[z] = result_shift >> 32;
+                // R[x] mod R[y]
+                R[i] = R[x] % R[y];
+                R[z] = R[x] / R[y];
 
                 // Definindo os campos afetados
                 ZN = (R[z] == 0);
-                OV = (R[z] != 0);
-
-                // Formatação da instrução
-                char instrucao[50];
-                sprintf(instrucao, "sra r%u,r%u,r%u,%d", z, x, y, imed);
-
-                // Formatação de saída
-                printf("0x%08X:\t%-25s\tR%u:R%u=R%u:R%u>>%d=0x%016llX,SR=0x%08X\n", R[29], instrucao, z, x, z, x, shift_amount, (unsigned long long)R[z], (ZN << 1) | (OV ? 0x60 : 0x00));
+                ZD = (R[y] == 0);
+                CY = (R[z] != 0);
             }
 
-            //  else if (((R[28] >> 8) & 0b111) == 0b110) {
-            //      int z = (R[28] >> 21) & 0x1F;
-            //      int x = (R[28] >> 16) & 0x1F;
-            //      int y = (R[28] >> 11) & 0x1F;
+            else if (((R[28] >> 8) & 0b111) == 0b111)
+            { // SRA
+                // Verifica se os bits 10, 9 e 8 correspondem a 0b111
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
-            //      // Verificando se o divisor é zero
-            //      if (R[y] == 0) {
-            //          // Divisor é zero, definindo ZD e OV
-            //          ZD = 1;
-            //          OV = 1;
+                // Definindo os campos afetados
+                // converta R[z] e R[y] para 64 bits, depois concatene os R[z] (bits mais significativos) e R[y] (bits menos significativos) em um único valor de 64 bits em result
+                uint64_t result = ((uint64_t)R[z] << 32) | ((uint64_t)R[y]) / (1 << (i + 1));
+                // R[z] recebe os 32 bits mais significativos de result e R[x] recebe os 32 bits menos significativos de result
+                R[z] = result >> 32;
+                R[y] = result & 0xFFFFFFFF;
+                ZN = (R[z] == 0);
+                OV = (R[z] != 0);
 
-            //          // Definindo os campos afetados
-            //          ZN = (R[z] == 0);
+                // Atualização do registrador de status (SR)
+                SR = (ZN << 6) | (OV << 3);
+                // Formatação da instrução
+                // sla r0,r2,r2    R0=R2<<2=0xFFF00000,SR=0x00000001
+                sprintf(instrucao, "sra r%u,r%u,r%u,%u", z, x, y, i);
+            }
 
-            //         // Formatação da instrução
-            //          sprintf(instrucao, "divs r%u,r%u,r%u", z, x, y);
+            else if (((R[28] >> 8) & 0b111) == 0b110)
+            { // DIVS
+                z = (R[28] & (0b11111 << 21)) >> 21;
+                x = (R[28] & (0b11111 << 16)) >> 16;
+                y = (R[28] & (0b11111 << 11)) >> 11;
+                i = (R[28] & (0b11111 << 0)) >> 0;
 
-            //          // Formatação de saída
-            //          printf("0x%08X:\t%-25s\tR%u=R%u%%R%u=0x%08X,R%u=R%u/R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, z, x, y, R[x] % R[y], z, x, y, R[x] / R[y], (ZN << 1) | (ZD << 2) | (OV << 3));
-            //          break;
-            //      }
-            //      else {
-            //          // Divisão com sinal
-            //          R[z] = R[x] % R[y];
-            //          R[x] = R[x] / R[y];
+                // R[x] mod R[y]
+                R[i] = (uint64_t)R[x] % (uint64_t)R[y];
+                R[z] = (uint64_t)R[x] / (uint64_t)R[y];
 
-            //         // Definindo os campos afetados
-            //         ZN = (R[z] == 0);
-            //         ZD = 0;
-            //         OV = (R[z] != 0);
-
-            //          // Formatação da instrução
-            //          sprintf(instrucao, "divs r%u,r%u,r%u", z, x, y);
-
-            //          // Formatação de saída
-            //          printf("0x%08X:\t%-25s\tR%u=R%u%%R%u=0x%08X,R%u=R%u/R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, z, x, y, R[z], z, x, y, R[x], (ZN << 1) | (ZD << 2) | (OV << 3));
-
-            //      }
-            //  }
-            break;
-
+                // Definindo os campos afetados
+                ZN = (R[z] == 0);
+                ZD = (R[y] == 0);
+                CY = (R[z] != 0);
+                break;
+            }
         // movs
         case 0b000001:
             // Obtendo operandos
@@ -791,59 +759,34 @@ int main(int argc, char *argv[])
             break;
 
         case 0b000101:
-        { // Supondo que cmp tenha opcode 0b000101
+        {
+            // Supondo que cmp tenha opcode 0b000101
+            int64_t CMP;
+            x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
+            y = (R[28] >> 11) & 0b11111; // Obtém o registrador y
 
-            // Execução da operação de comparação entre IR e PC
-            int32_t result_cmp = R[28] - R[29];
+            // Execução da operação de comparação
+            CMP = R[x] - R[y];
 
             // Definindo os campos afetados
-            uint32_t ZN = (result_cmp == 0);
-            uint32_t ZD = (R[29] == 0);
-            uint32_t SN = (result_cmp < 0);
-            uint32_t OV = ((R[28] < 0 && R[29] >= 0 && result_cmp >= 0) || (R[28] >= 0 && R[29] < 0 && result_cmp < 0));
-            uint32_t IV = 0; // Não há instrução inválida na operação de comparação
-            uint32_t CY = 0; // Não há carry na operação de subtração
-
-            // Definindo o valor de SR baseado nos campos afetados
-            if (ZN)
-            {
-                SR = 0b1000000;
-            }
-            else if (ZD)
-            {
-                SR = 0b0100000;
-            }
-            else if (SN)
-            {
-                SR = 0b0010000;
-            }
-            else if (OV)
-            {
-                SR = 0b0001000;
-            }
-            else if (IV)
-            {
-                SR = 0b0000100;
-            }
-            else
-            {
-                SR = 0; // Nenhum dos casos acima, então SR é 0
-            }
+            ZN = (CMP == 0);
+            SN = (CMP < 0);
 
             // Formatação da instrução
             char instrucao[50];
-            sprintf(instrucao, "cmp ir,pc");
+            sprintf(instrucao, "cmp r%u,r%u", x, y);
 
             // Formatação de saída
-            printf("0x%08X:\t%-25s\tSR=0x%08X\n", R[29], instrucao, SR);
+            printf("0x%08X:\t%-25s\tR%u-R%u=0x%08X,SR=0x%08X\n", R[29], instrucao, x, y, CMP, (ZN << 1) | (SN << 2));
         }
         break;
 
+        // and
         case 0b000110: // Supondo que 'and' tenha opcode 0b000110
         {
-            uint32_t z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
-            uint32_t x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
-            uint32_t y = (R[28] >> 11) & 0b11111; // Obtém o registrador y
+            z = (R[28] & (0b11111 << 21)) >> 21;
+            x = (R[28] & (0b11111 << 16)) >> 16;
+            y = (R[28] & (0b11111 << 11)) >> 11;
 
             // Execução da operação bit a bit 'and'
             R[z] = R[x] & R[y];
@@ -861,13 +804,13 @@ int main(int argc, char *argv[])
         }
         break;
 
-        case 0b000111: // Supondo que 'or' tenha opcode 0b000111
+        // or
+        case 0b000111:
         {
-            uint32_t z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
-            uint32_t x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
-            uint32_t y = (R[28] >> 11) & 0b11111; // Obtém o registrador y
+            z = (R[28] & (0b11111 << 21)) >> 21;
+            x = (R[28] & (0b11111 << 16)) >> 16;
+            y = (R[28] & (0b11111 << 11)) >> 11;
 
-            // Execução da operação bit a bit 'or'
             R[z] = R[x] | R[y];
 
             // Definindo os campos afetados
@@ -885,11 +828,12 @@ int main(int argc, char *argv[])
 
         case 0b001000: // Supondo que 'not' tenha opcode 0b001000
         {
-            uint32_t z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
-            uint32_t x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
+            z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
+            x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
 
             // Execução da operação bit a bit 'not'
-            R[z] = ~R[x];
+            // crie uma máscara para inverter os bits
+            R[z] = R[x] && 0xFFFFFFFF;
 
             // Definindo os campos afetados
             ZN = (R[z] == 0);
@@ -906,11 +850,11 @@ int main(int argc, char *argv[])
 
         // xor
         case 0b001001:
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            y = (R[28] >> 11) & 0x1F;
+            z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
+            x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
+            y = (R[28] >> 11) & 0b11111; // Obtém o registrador y
 
-            // Execução da operação XOR
+            // Execução da operação XOR - utilizando máscara de bits para inverter os bits R[x] xor R[y]
             R[z] = R[x] ^ R[y];
 
             // Definindo os campos afetados
@@ -926,9 +870,10 @@ int main(int argc, char *argv[])
 
         // addi
         case 0b010010:
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = R[28] & 0xFFFF;
+            z = (R[28] & (0b11111 << 21)) >> 21;
+            x = (R[28] & (0b11111 << 16)) >> 16;
+            // i vai receber os bits 0 a 15 da instrução e o resto dos bits até 31 são iguais ao bit 15 da instrução
+            i = (R[28] & 0xFFFF) | ((R[28] & 0x8000) ? 0xFFFF8000 : 0x00000000);
 
             // Execução da operação de adição imediata
             R[z] = R[x] + i;
@@ -948,9 +893,10 @@ int main(int argc, char *argv[])
 
         // subi
         case 0b010011:
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            int16_t i = (int16_t)(R[28] & 0xFFFF); // Conversão para um inteiro de 16 bits com sinal
+            z = (R[28] & (0b11111 << 21)) >> 21;
+            x = (R[28] & (0b11111 << 16)) >> 16;
+            // i vai receber os bits 0 a 15 da instrução e o resto dos bits até 31 são iguais ao bit 15 da instrução
+            i = (R[28] & 0xFFFF) | ((R[28] & 0x8000) ? 0xFFFF8000 : 0x00000000);
 
             // Execução da operação de subtração imediata
             R[z] = R[x] - i;
@@ -970,12 +916,12 @@ int main(int argc, char *argv[])
 
         // muli
         case 0b010100:
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = (int16_t)(R[28] & 0xFFFF); // Conversão para um inteiro de 16 bits com sinal
-
-            // Execução da operação de multiplicação imediata
-            R[z] = R[x] * i;
+            z = (R[28] >> 21) & 0b11111; // Obtém o registrador z
+            x = (R[28] >> 16) & 0b11111; // Obtém o registrador x
+            // i vai receber os bits 0 a 15 da instrução e o resto dos bits até 31 são iguais ao bit 15 da instrução
+            i = (R[28] & 0xFFFF) | ((R[28] & 0x8000) ? 0xFFFF8000 : 0x00000000);
+            (int64_t) R[z];
+            R[z] = (int64_t)R[x] * (int64_t)i; // TODO: Verificar se R[z] está em 64 bits
 
             // Formatação da instrução
             sprintf(instrucao, "muli r%d,r%d,%d", z, x, i);
@@ -986,9 +932,13 @@ int main(int argc, char *argv[])
 
         // divi
         case 0b010101:
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = (int16_t)(R[28] & 0xFFFF); // Conversão para um inteiro de 16 bits com sinal
+            z = (R[28] & (0b11111 << 21)) >> 21;
+            x = (R[28] & (0b11111 << 16)) >> 16;
+            i = (R[28] & (0b11111 << 0)) >> 0;
+
+            // i vai receber os bits 0 a 15 da instrução e o resto dos bits até 31 são iguais ao bit 15 da instrução
+            i = (R[28] & 0xFFFF) | ((R[28] & 0x8000) ? 0xFFFF8000 : 0x00000000);
+            R[z] = R[x] / i;
 
             // Verificando se o divisor é zero
             if (i == 0)
@@ -1042,8 +992,8 @@ int main(int argc, char *argv[])
 
         // cmpi
         case 0b010111:
-            x = (R[28] >> 16) & 0x1F;
-            i = (int16_t)(R[28] & 0xFFFF); // Conversão para um inteiro de 16 bits com sinal
+            z = (R[28] & (0b11111 << 16)) >> 16;
+            i = (R[28] & 0xFFFF) | ((R[28] & 0x8000) ? 0xFFFF8000 : 0x00000000);
 
             // Execução da operação de comparação imediata
             int64_t CMPI = R[x] - i;
@@ -1075,68 +1025,65 @@ int main(int argc, char *argv[])
             printf("0x%08X:\t%-25s\tR%d=MEM[0x%08X]=0x%04X\n", R[29], instrucao, z, R[x] + i, R[z]);
             break;
 
-        case 0b011011: // s8
-        {
-            // Extrair os campos do opcode
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = R[28] & 0xFFFF;
+        // case 0b011011: // s8
+        // {
+        //     // Otendo operandos
+        //     z = (R[28] & (0b11111 << 21)) >> 21;
+        //     x = (R[28] & (0b11111 << 16)) >> 16;
+        //     i = R[28] & 0xFFFF;
+        //     // Execucao do comportamento com MEM8 e MEM32
+        //     MEM8[R[x] + i] | (((uint8_t *)(MEM32))[(R[x] + i) >> 2]) = R[z];
+        //     // Formatacao da instrucao
+        //     sprintf(instrucao, "l8 r%u,[r%u%s%i]", z, x, (i >= 0) ? ("+") : (""), i);
+        //     // Formatacao de saida em tela (deve mudar para o arquivo de saida)
+        //     printf("0x%08X:\t%-25s\tR%u=MEM[0x%08X]=0x%02X\n", R[29], instrucao, z,
+        //            R[x] + i, R[z]);
+        //     break;
+        // }
 
-            // Calcular o endereço de memória
-            uint32_t endereco_memoria = R[x] + (i << 4);
+        // case 0b011100: // s16
+        // {
+        //     // Otendo operandos
+        //     z = (R[28] & (0b11111 << 21)) >> 21;
+        //     x = (R[28] & (0b11111 << 16)) >> 16;
+        //     i = R[28] & 0xFFFF;
+        //     // Execucao do comportamento com MEM8 e MEM32
+        //     MEM8[R[x] + i] | (((uint8_t *)(MEM32))[(R[x] + i) >> 2]) = R[z];
+        //     // Formatacao da instrucao
+        //     sprintf(instrucao, "l8 r%u,[r%u%s%i]", z, x, (i >= 0) ? ("+") : (""), i);
+        //     // Formatacao de saida em tela (deve mudar para o arquivo de saida)
+        //     printf("0x%08X:\t%-25s\tR%u=MEM[0x%08X]=0x%02X\n", R[29], instrucao, z,
+        //            R[x] + i, R[z]);
+        //     break;
+        // }
 
-            // Escrever o valor do registrador em MEM8 no endereço calculado
+        // case 0b011101: // s32
+        // {
+        //     // Otendo operandos
+        //     z = (R[28] & (0b11111 << 21)) >> 21;
+        //     x = (R[28] & (0b11111 << 16)) >> 16;
+        //     i = R[28] & 0xFFFF;
+        //     // Execucao do comportamento com MEM8 e MEM32
+        //     MEM8[R[x] + i] | (((uint8_t *)(MEM32))[(R[x] + i) >> 2]) = R[z];
+        //     // Formatacao da instrucao
+        //     sprintf(instrucao, "l8 r%u,[r%u%s%i]", z, x, (i >= 0) ? ("+") : (""), i);
+        //     // Formatacao de saida em tela (deve mudar para o arquivo de saida)
+        //     printf("0x%08X:\t%-25s\tR%u=MEM[0x%08X]=0x%02X\n", R[29], instrucao, z,
+        //            R[x] + i, R[z]);
+        //     break;
+        // }
 
-            // Imprimir o formato de saída
-            printf("0x%08X:\ts8 [r%d%s%d],r%d\tMEM[0x%08X]=R%d=0x%02X\n", R[29], x, (i >= 0) ? "+" : "", i, z, endereco_memoria, z, R[z] & 0xFF);
-            break;
-        }
+        // case 0b101010:
+        // {
+        //     // Extrair o valor imediato do opcode
+        //     i = R[28] & 0xFFFFFF;
 
-        case 0b011100: // s16
-        {
-            // Extrair os campos do opcode
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = R[28] & 0xFFFF;
+        //     // Calcular o novo valor do PC (Program Counter)
+        //     R[28] += 4 + ((i << 2) & 0xFFFFFFFC); // Shift left de 2 bits e alinhamento de palavra
 
-            // Calcular o endereço de memória
-            uint32_t endereco_memoria = R[x] + (i << 8);
-
-            // Escrever o valor do registrador em MEM8 no endereço calculado
-
-            // Imprimir o formato de saída
-            printf("0x%08X:\ts8 [r%d%s%d],r%d\tMEM[0x%08X]=R%d=0x%02X\n", R[29], x, (i >= 0) ? "+" : "", i, z, endereco_memoria, z, R[z] & 0xFF);
-            break;
-        }
-
-        case 0b011101: // s32
-        {
-            // Extrair os campos do opcode
-            z = (R[28] >> 21) & 0x1F;
-            x = (R[28] >> 16) & 0x1F;
-            i = R[28] & 0xFFFF;
-
-            // Calcular o endereço de memória
-            uint32_t endereco_memoria = R[x] + (i << 16);
-
-            // Escrever o valor do registrador em MEM8 no endereço calculado
-
-            // Imprimir o formato de saída
-            printf("0x%08X:\ts8 [r%d%s%d],r%d\tMEM[0x%08X]=R%d=0x%02X\n", R[29], x, (i >= 0) ? "+" : "", i, z, endereco_memoria, z, R[z] & 0xFF);
-            break;
-        }
-
-        case 0b101010:
-        {
-            // Extrair o valor imediato do opcode
-            i = R[28] & 0xFFFFFF;
-
-            // Calcular o novo valor do PC (Program Counter)
-            R[28] += 4 + ((i << 2) & 0xFFFFFFFC); // Shift left de 2 bits e alinhamento de palavra
-
-            // Imprimir o formato de saída
-            printf("0x%08X:\tbae %d\tPC=0x%08X\n", R[28] - 4, i, R[28]);
-        }
+        //     // Imprimir o formato de saída
+        //     printf("0x%08X:\tbae %d\tPC=0x%08X\n", R[28] - 4, i, R[28]);
+        // }
 
         // Instrucao desconhecida
         default:
